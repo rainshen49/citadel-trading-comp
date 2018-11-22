@@ -16,8 +16,18 @@ class Book(object):
         # could be cached
         self.bids = self.json['bids']
         self.asks = self.json['asks']
-        self.bid_price = self.bids[0]['price'] if self.bids else float('nan')
-        self.ask_price = self.asks[0]['price'] if self.asks else float('nan')
+        self.ask_price = 0
+        self.asks_quantity_left = 0
+        self.bid_price = 0
+        self.bids_quantity_left = 0
+        if self.bids:
+            bid = self.bids[0]
+            self.bid_price = bid['price']
+            self.bids_quantity_left = bid['quantity'] - bid['quantity_filled']
+        if self.asks:
+            ask = self.asks[0]
+            self.ask_price = ask['price']
+            self.asks_quantity_left = ask['quantity'] - ask['quantity_filled']
 
 
 class Session(object):
@@ -47,7 +57,7 @@ class Session(object):
                 print('.', self.tick, end='')
                 return True
                 # this timer is unnecessary, network latency should be enough
-            time.sleep(0.1)
+            time.sleep(0.05)
 
     def get_book(self, sym):
         resp = self.session.get(
@@ -110,17 +120,17 @@ def spread_cover(session, book1, book2, commission, buffer):
     if book1.bid_price - book2.ask_price > commission + buffer*2:
         buy = book2.sym
         buy_price = book2.ask_price+buffer
-        buy_volume = book2.asks[0]['quantity']//2
+        buy_volume = book2.asks_quantity_left//2
         sell = book1.sym
         sell_price = book1.bid_price-buffer
-        sell_volume = book1.bids[0]['quantity']//2
+        sell_volume = book1.bids_quantity_left//2
     elif book2.bid_price - book1.ask_price > commission + buffer*2:
         buy = book1.sym
         buy_price = book1.ask_price+buffer
-        buy_volume = book1.asks[0]['quantity']//2
+        buy_volume = book1.asks_quantity_left//2
         sell = book2.sym
         sell_price = book2.bid_price-buffer
-        sell_volume = book2.bids[0]['quantity']//2
+        sell_volume = book2.bids_quantity_left//2
     else:
         # no bid ask spread detected
         return
