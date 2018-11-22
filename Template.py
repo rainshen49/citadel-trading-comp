@@ -16,9 +16,9 @@ class Book(object):
         # could be cached
         self.bids = self.json['bids']
         self.asks = self.json['asks']
-        self.ask_price = 0
+        self.ask_price = 1
         self.asks_quantity_left = 0
-        self.bid_price = 0
+        self.bid_price = 1
         self.bids_quantity_left = 0
         if self.bids:
             bid = self.bids[0]
