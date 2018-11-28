@@ -3,10 +3,6 @@ import requests
 import time
 from math import floor
 
-# TODO clear imports
-import json
-import traceback
-
 shutdown = False
 
 MAIN_TAKER = 0.0065
@@ -19,8 +15,7 @@ TAKEMAIN = MAIN_TAKER - ALT_MAKER
 TAKEALT = ALT_TAKER - MAIN_MAKER
 BUFFER = 0.01
 
-run_count = 37
-
+NaN = float('nan')
 
 class ApiException(Exception):
     pass
@@ -28,13 +23,13 @@ class ApiException(Exception):
 
 class Book(object):
     def __init__(self, sym, json):
+        global NaN
         self.sym = sym
         self.json = json
-        # could be cached
         self.bids = json['bids']
         self.asks = json['asks']
-        self.ask_price = None
-        self.bid_price = None
+        self.ask_price = NaN
+        self.bid_price = NaN
         if self.bids:
             self.bid_price = self.bids[0]['price']
         if self.asks:
@@ -119,7 +114,7 @@ class Session(object):
                 print('.', self.tick)
                 return True
                 # this timer is unnecessary, network latency should be enough
-            time.sleep(0.25)
+            time.sleep(0.1)
 
     def get_book(self, sym):
         resp = self.session.get(
@@ -166,9 +161,9 @@ class Session(object):
             "realized"
         ]} for sec in json}
 
-    def get_OHLC(self, sym):
+    def get_OHLC(self, sym, ticks=50):
         resp = self.session.get(
-            self.url + '/v1/securities/history', params={'ticker': sym})
+            self.url + '/v1/securities/history', params={'ticker': sym,'limit':ticks})
         if not resp.ok:
             raise ApiException('could not get OHLC: ' + str(resp))
         return [OHLC(sym, ohlc) for ohlc in resp.json()]
@@ -216,47 +211,6 @@ class Session(object):
             return json
 
 
-def getHistory(session):
-    # observe certain metrics in the market
-    ETF = session.get_OHLC('ETF')
-    WMTM = session.get_OHLC('WMT-M')
-    MMMM = session.get_OHLC('MMM-M')
-    CATM = session.get_OHLC('CAT-M')
-    WMTA = session.get_OHLC('WMT-A')
-    MMMA = session.get_OHLC('MMM-A')
-    CATA = session.get_OHLC('CAT-A')
-    ES = session.get_OHLC('ES')
-
-    return {
-        'ES': ES,
-        'ETF': ETF,
-        'WMTM': WMTM,
-        'MMMM': MMMM,
-        'CATM': CATM,
-        'WMTA': WMTA,
-        'MMMA': MMMA,
-        'CATA': CATA
-    }
-
-
-prices = {
-    "ETF": [],
-    "WMT-M": [],
-    "MMM-M": [],
-    "CAT-M": [],
-    "WMT-A": [],
-    "MMM-A": [],
-    "CAT-A": []}
-imbalances = {
-    "ETF": [],
-    "WMT-M": [],
-    "MMM-M": [],
-    "CAT-M": [],
-    "WMT-A": [],
-    "MMM-A": [],
-    "CAT-A": []}
-
-
 def main():
     # price does change in every tick
 
@@ -267,8 +221,7 @@ def main():
     # shock handling
     # wave riding
 
-    global prices, imbalance, run_count
-
+    # pairTickers = [('WMT-M', 'WMT-A'), ('CAT-M', 'CAT-A'), ('MMM-M', 'MMM-A')]
     with Session('http://localhost:9998', 'VHK3DEDE') as session:
 
         while session.get_tick():
@@ -278,74 +231,100 @@ def main():
                 exchange_arbitrage(session, "CAT-M", "CAT-A")
                 exchange_arbitrage(session, "MMM-M", "MMM-A")
                 index_arbitrage(session, ['WMT', 'MMM', 'CAT'])
-                # for ticker in prices:
-                    # front_runner(session, ticker)
             except Exception as ex:
                 print("error", str(ex))
-                with open("./error.txt", 'a') as logfile:
-                    traceback.print_exc(file=logfile)
-                continue
-            # print((end - start)*1000, 'ms')
-        try:
-            # data = getHistory(session)
-            # with open('./data'+str(run_count)+'.json', 'w') as outfile:
-                # json.dump(data, outfile)
-            trader = session.getTrader()
-            with open('./trader'+str(run_count)+'.json', 'w') as outfile:
-                json.dump(trader, outfile)
-        except:
-            print()
-        #     print("collecting historical data failed")
-        # with open("./prices"+str(run_count)+".json", 'w') as outfile:
-        #     json.dump(prices, outfile)
-        # with open("./imbalances"+str(run_count)+".json", 'w') as outfile:
-        #     json.dump(imbalances, outfile)
-        # while not session.get_tick():
-        #     time.sleep(1)
-        run_count += 1
-    return main()
-
+        # trader = session.getTrader()
+        # print(trader['nlv'])
 
 # TODO: position cleaner: try to reduce gross position loss-free
-pairTickers = [('WMT-M', 'WMT-A'), ('CAT-M', 'CAT-A'), ('MMM-M', 'MMM-A')]
 
 # TODO: implement range runner for the last x ticks
 
-# TODO: implement delta runner per one send, two sec etc
+def avg(arr):
+    return sum(arr)/float(len(arr))
 
+def window_trend(left,right):
+    leftavg = avg(left)
+    rightavg = avg(right)
+    if rightavg > leftavg:
+        return 1
+    elif rightavg < leftavg:
+        return -1
+    else:
+        return 0
 
-def front_runner(session, ticker):
-    # if enough room on both ends, place a pair order
-    global prices, imbalance
-    book = session.get_book(ticker)
-    bids_room = book.bids_room()
-    asks_room = book.asks_room()
-    if None in [bids_room, asks_room, book.bid_price, book.ask_price]:
+def splitarr(arr):
+    n = len(arr)
+    left = arr[:n//2]
+    right = arr[n//2:]
+    return left,right
+
+def wwindow_trend(prices):
+    left, right = splitarr(prices)
+    trend = window_trend(left,right)
+    lleft, lright = splitarr(left)
+    rleft, rright = splitarr(right)
+    trendl = window_trend(lleft,lright)
+    trendr = window_trend(rleft,rright)
+    return trend + trendl + trendr
+
+def trend_runner(session, ticker):
+    if session.tick<20:
         return
-    imbalance = floor(bids_room/(asks_room+1))
-    imbalances[ticker].append(imbalance)
-    curr_price = (book.bid_price+book.ask_price)/2
-    prices[ticker].append(curr_price)
+    # short term trend
+    prices = session.get_OHLC(ticker, 20)
+    highs = [price.high for price in prices]
+    lows = [price.low for price in prices]
+    highTrend = wwindow_trend(highs)
+    lowTrend = wwindow_trend(lows)
+    if highTrend+lowTrend < -4:
+        # volatile, but no trend
+        session.buyM(ticker,1000)
+    if highTrend+lowTrend > 4:
+        session.sellM(ticker,1000)
+    
+    print(ticker,"short hightrend",highTrend,"lowtrend",lowTrend)
 
+    if session.tick<100:
+        return
+    prices = session.get_OHLC(ticker, 100)
+    highs = [price.high for price in prices]
+    lows = [price.low for price in prices]
+    highTrend = wwindow_trend(highs)
+    lowTrend = wwindow_trend(lows)
+    # grown too much
+    if highTrend+lowTrend < -4:
+        # volatile, but no trend
+        session.sellM(ticker,1000)
+    # dropped too much
+    if highTrend+lowTrend > 4:
+        session.buyM(ticker,1000)
+    
+    print(ticker,"long hightrend",highTrend,"lowtrend",lowTrend)
 
 def shock_runner(session):
     shocks = session.getNews()
     quantity = 50000
     for shock in sorted(shocks, key=lambda s: s.elapsed):
-        if shock.elapsed < 1:
-            Mticker = shock.ticker+"-M"
-            Aticker = shock.ticker+"-A"
+        Mticker = shock.ticker+"-M"
+        Aticker = shock.ticker+"-A"
+        if shock.elapsed < 2:
             if shock.amount > MAIN_TAKER + BUFFER*2:
-                Mprice = session.buyM(Mticker, quantity)
-                Aprice = session.buyM(Aticker, quantity)
-                session.sell(Mticker, Mprice+shock.amount-BUFFER, quantity)
-                session.sell(Aticker, Aprice+shock.amount-BUFFER, quantity)
+                session.buyM(Mticker, quantity)
+                session.buyM(Aticker, quantity)
             elif - shock.amount > MAIN_TAKER + BUFFER*2:
-                Mprice = session.sellM(Mticker, quantity)
-                Aprice = session.sellM(Aticker, quantity)
-                session.buy(Mticker, Mprice+shock.amount+BUFFER, quantity)
-                session.buy(Aticker, Aprice+shock.amount+BUFFER, quantity)
+                session.sellM(Mticker, quantity)
+                session.sellM(Aticker, quantity)
             print('shock', shock.ticker, shock.amount)
+        if shock.elapsed == 2:
+            if shock.amount > MAIN_TAKER + BUFFER*2:
+                session.sellM(Mticker, quantity)
+                session.sellM(Aticker, quantity)
+            elif - shock.amount > MAIN_TAKER + BUFFER*2:
+                session.buyM(Mticker, quantity)
+                session.buyM(Aticker, quantity)
+            print('post shock', shock.ticker, shock.amount)
+
 
 
 TAKER4 = MAIN_TAKER * 5
@@ -411,25 +390,36 @@ def index_arbitrage(session, tickers):
 # TODO: send limit orders and use market to cover unfilled ones after
 
 def exchange_arbitrage(session, mticker, aticker):
+    global NaN
     mbook = session.get_book(mticker)
     masks_room = mbook.asks_room()
     mbids_room = mbook.bids_room()
     abook = session.get_book(aticker)
     aasks_room = abook.asks_room()
     abids_room = abook.bids_room()
-    # TODO: could set a good price here
-    if None in [mbook.bid_price, mbook.ask_price, abook.ask_price, abook.bid_price]:
-        return
-    if mbook.bid_price - abook.ask_price > TAKER+BUFFER:
+    # a lot of room, make market orders
+    if mbook.bid_price - abook.ask_price > TAKER+BUFFER*2:
         quantity = aasks_room if aasks_room < mbids_room else mbids_room
         quantity = min([quantity, 50000])
         session.sellM(mbook.sym, quantity)
         session.buyM(abook.sym, quantity)
-    elif abook.bid_price - mbook.ask_price > TAKER+BUFFER:
+    elif abook.bid_price - mbook.ask_price > TAKER+BUFFER*2:
         quantity = aasks_room if aasks_room < mbids_room else mbids_room
         quantity = min([quantity, 50000])
         session.sellM(abook.sym, quantity)
         session.buyM(mbook.sym, quantity)
+    # only a little room, make limit orders
+    if mbook.bid_price - abook.ask_price > BUFFER:
+        quantity = aasks_room if aasks_room < mbids_room else mbids_room
+        quantity = min([quantity, 50000])
+        session.sell(mbook.sym, mbook.bid_price, quantity)
+        session.buy(abook.sym, abook.ask_price, quantity)
+    elif abook.bid_price - mbook.ask_price > BUFFER:
+        quantity = aasks_room if aasks_room < mbids_room else mbids_room
+        quantity = min([quantity, 50000])
+        session.sell(abook.sym, abook.bid_price, quantity)
+        session.buy(mbook.sym, mbook.ask_price, quantity)
+
 
 
 def sigint(signum, frame):
