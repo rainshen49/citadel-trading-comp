@@ -1,5 +1,5 @@
 # citadel-trading-comp
-Citadel Trading Competition Code
+Citadel Trading Competition Code. The JSON files are an overnight run of 36 sessions.
 
 # Strategies
 
